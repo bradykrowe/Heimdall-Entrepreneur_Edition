@@ -40,7 +40,19 @@ $ApiHeaders = @{ Accept = "application/vnd.github+json" }
 if ($Token) { $ApiHeaders["Authorization"] = "Bearer $Token" }
 
 Write-Host "Reading release $Tag ..."
-$rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Tag" -Headers $ApiHeaders
+try {
+    $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Tag" -Headers $ApiHeaders
+} catch {
+    if ($Token) { throw }
+    # GitHub limits API reads per network (a classroom shares one). The
+    # release page lists the same downloads without that limit.
+    $page = (Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$Repo/releases/expanded_assets/$Tag").Content
+    $found = [regex]::Matches($page, "href=""(/$Repo/releases/download/$Tag/[^""]+)""") | ForEach-Object {
+        $u = "https://github.com" + $_.Groups[1].Value
+        [pscustomobject]@{ name = ($u -split '/')[-1]; browser_download_url = $u }
+    }
+    $rel = [pscustomobject]@{ assets = @($found) }
+}
 $zipAsset = $rel.assets | Where-Object { $_.name -like "*.zip" } | Select-Object -First 1
 $shaAsset = $rel.assets | Where-Object { $_.name -like "*.sha256" } | Select-Object -First 1
 if (-not $zipAsset) { throw "release $Tag has no .zip asset." }

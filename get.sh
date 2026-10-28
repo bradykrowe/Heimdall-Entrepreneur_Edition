@@ -73,9 +73,25 @@ fi
 
 API="https://api.github.com/repos/$REPO/releases/tags/$TAG"
 say "Reading release $TAG ..."
-JSON="$(gh_get "$API" - application/vnd.github+json)" || die "could not read the release $TAG. Check the tag and your network."
+JSON=""
+if ! JSON="$(gh_get "$API" - application/vnd.github+json)"; then
+  [ -z "$TOKEN" ] || die "could not read the release $TAG. Check the tag, the token and your network."
+  # GitHub limits API reads per network (a classroom shares one). The
+  # release page lists the same downloads without that limit.
+  JSON=""
+  PAGE="$(curl -fsSL "https://github.com/$REPO/releases/expanded_assets/$TAG")" \
+    || die "could not read the release $TAG. Check the tag and your network."
+fi
 
-if [ -n "$TOKEN" ]; then
+if [ -z "$JSON" ]; then
+  LINKS="$(printf '%s' "$PAGE" | grep -o "href=\"/$REPO/releases/download/$TAG/[^\"]*\"" | sed 's/^href="//; s/"$//')"
+  ZIP_URL="https://github.com$(printf '%s\n' "$LINKS" | grep '\.zip$' | head -n1)"
+  SHA_URL="https://github.com$(printf '%s\n' "$LINKS" | grep '\.sha256$' | head -n1)"
+  [ "$ZIP_URL" != "https://github.com" ] || ZIP_URL=""
+  [ "$SHA_URL" != "https://github.com" ] || SHA_URL=""
+  ZIP_NAME="$(basename "$ZIP_URL")"
+  ACCEPT="*/*"
+elif [ -n "$TOKEN" ]; then
   # A release that is not public: assets come through the API by asset URL.
   PAIRS="$(printf '%s' "$JSON" | tr ',' '\n' | awk -F'"' '
     /"url": *"https:\/\/api\.github\.com\/repos\/.*\/releases\/assets\/[0-9]+"/ { u = $4 }
