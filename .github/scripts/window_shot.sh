@@ -34,7 +34,8 @@ echo "window at ${URL%%\?*}"
 shot 1_fresh "$URL"
 expect 1_fresh "Set up your second brain"
 expect 1_fresh "Answer /setup in Claude"
-expect 1_fresh "Open Claude and copy /setup"
+# No software step here, so Obsidian has not opened the folder: step 2 is current.
+expect 1_fresh "Open in Obsidian"
 
 # What /setup and a first /organize leave behind, done the way the commands do it.
 printf '# Start here\n\n## Who I am\nA founder.\n' >"$VAULT/START_HERE.md"
