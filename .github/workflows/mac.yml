@@ -1,0 +1,177 @@
+# macOS install of the Heimdall Entrepreneur Edition on GitHub's Mac runners.
+#
+# install: the runner is stripped to a clean Mac first (Homebrew, Node,
+#   Claude Code and the image's Pythons off; Apple's python3 stays), then the
+#   README's one line runs with the software step ON. The vault, the start
+#   file, the carrier, the software and the setup window are checked, the
+#   window and /organize tests run on every python3 the Mac has, and the
+#   line runs a second time over a member's edit.
+# zip: the Release zip unpacked the way Finder does it (ditto), the
+#   double-click entry point Install.command run with the software step off,
+#   and the setup window rendered in Chrome before and after a first sort.
+#
+# By hand, or when a Release is published. This repo is public, so Mac
+# minutes cost nothing.
+#
+# What this cannot prove: Gatekeeper's dialog on a downloaded Install.command,
+# a real password prompt, a Mac without Command Line Tools, the Claude app.
+
+name: mac
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to install from
+        type: string
+        default: v0.1.0-beta
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  HEIMDALL_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Strip the macOS image
+        shell: bash
+        run: |
+          set -uo pipefail
+          for p in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+            if [ -x "$p" ]; then
+              NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)" -- --force --path="$(dirname "$(dirname "$p")")" || true
+            fi
+          done
+          sudo rm -rf /opt/homebrew /usr/local/Homebrew /usr/local/Cellar /usr/local/Caskroom \
+            "$HOME/Library/Caches/Homebrew" "$HOME/Library/Logs/Homebrew" \
+            "$HOME/hostedtoolcache/node" /usr/local/lib/node_modules \
+            "$HOME/.npm" "$HOME/.claude" "$HOME/.heimdall" "$HOME/Second_Brain" /Applications/Obsidian.app
+          sudo rm -rf /Library/Frameworks/Python.framework /Applications/Python* "$HOME/hostedtoolcache/Python" \
+            /usr/local/bin/python* /usr/local/bin/pip* /usr/local/bin/idle* /usr/local/bin/pydoc*
+          sudo find -L /usr/local/bin /usr/local/lib /usr/local/share /usr/local/opt -type l -delete 2>/dev/null || true
+          hash -r
+          for c in brew node npm npx claude; do
+            while p="$(command -v "$c" 2>/dev/null)"; do sudo rm -f "$p"; hash -r; done
+          done
+          for f in "$HOME/.zprofile" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; do
+            [ -f "$f" ] && sed -i '' '/brew shellenv/d' "$f"
+          done
+          echo "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" >> "$GITHUB_ENV"
+          export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; hash -r
+          fail=0
+          for c in brew node claude; do
+            if p="$(command -v "$c" 2>/dev/null)"; then echo "::error::$c still found at $p"; fail=1; fi
+          done
+          [ -e /Applications/Obsidian.app ] && { echo "::error::Obsidian.app still present"; fail=1; }
+          echo "clean: macOS $(sw_vers -productVersion), $(uname -m), python3 $(python3 --version 2>&1) at $(command -v python3)"
+          exit "$fail"
+
+      - name: Install with the README's one line
+        shell: bash
+        run: |
+          set +e -uo pipefail
+          mkdir -p "$RUNNER_TEMP/ci"
+          RAW="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$HEIMDALL_TAG/get.sh"
+          echo "member line: curl -fsSL $RAW | bash"
+          echo "ci adds: --unattended --no-launch --vault ~/Second_Brain"
+          curl -fsSL "$RAW" | bash -s -- --unattended --no-launch --vault "$HOME/Second_Brain" 2>&1 | tee "$RUNNER_TEMP/ci/first_run.txt"
+          code="${PIPESTATUS[1]}"
+          echo "installer exit code: $code"
+          log="$(find "$HOME/Downloads" -maxdepth 4 -name install_log.txt | head -n1)"
+          [ -n "$log" ] && cp "$log" "$RUNNER_TEMP/ci/install_log_first.txt"
+          exit "$code"
+
+      - name: Check the first install
+        shell: bash
+        run: bash .github/scripts/check_mac.sh "$HOME/Second_Brain" first "$RUNNER_TEMP/ci/first_run.txt" 2>&1 | tee "$RUNNER_TEMP/ci/check_first.txt"; exit "${PIPESTATUS[0]}"
+
+      - name: Run the one line a second time over a member's edit
+        shell: bash
+        run: |
+          set +e -uo pipefail
+          printf '\nCI_MEMBER_EDIT_4417\n' >> "$HOME/Second_Brain/START_HERE.md"
+          RAW="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$HEIMDALL_TAG/get.sh"
+          curl -fsSL "$RAW" | bash -s -- --unattended --no-launch --vault "$HOME/Second_Brain" 2>&1 | tee "$RUNNER_TEMP/ci/second_run.txt"
+          code="${PIPESTATUS[1]}"
+          echo "installer exit code: $code"
+          exit "$code"
+
+      - name: Check the second install
+        shell: bash
+        run: bash .github/scripts/check_mac.sh "$HOME/Second_Brain" second "$RUNNER_TEMP/ci/second_run.txt" 2>&1 | tee "$RUNNER_TEMP/ci/check_second.txt"; exit "${PIPESTATUS[0]}"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-${{ matrix.os }}
+          path: ${{ runner.temp }}/ci/
+          if-no-files-found: warn
+
+  zip:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Download, verify and unpack like Finder
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ci" "$RUNNER_TEMP/release"
+          gh release download "$HEIMDALL_TAG" --repo "$GITHUB_REPOSITORY" --pattern "*.zip" --pattern "*.sha256" --dir "$RUNNER_TEMP/release"
+          cd "$RUNNER_TEMP/release" && shasum -a 256 -c ./*.sha256
+          ditto -x -k ./*.zip "$RUNNER_TEMP/unpacked"
+          root="$(find "$RUNNER_TEMP/unpacked" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+          echo "UNPACK=$root" >> "$GITHUB_ENV"
+          fail=0
+          for f in Install.command install_heimdall.sh; do
+            if [ -x "$root/$f" ]; then echo "PASS $f is executable after unzip"; else echo "::error::$f lost its executable bit"; fail=1; fi
+          done
+          head -c 2 "$root/Install.command" | grep -q '#!' && echo "PASS Install.command starts with #!" || { echo "::error::no shebang"; fail=1; }
+          if grep -q $'\r' "$root/Install.command" "$root/install_heimdall.sh"; then echo "::error::CRLF line endings in a Mac script"; fail=1; else echo "PASS Mac scripts are LF"; fi
+          exit "$fail"
+
+      - name: Install.command, software step off
+        shell: bash
+        run: |
+          set +e -uo pipefail
+          cd "$UNPACK"
+          ./Install.command --unattended --no-launch --skip-software --vault "$HOME/Scaffold_Brain" </dev/null 2>&1 | tee "$RUNNER_TEMP/ci/command_run.txt"
+          code="${PIPESTATUS[0]}"
+          echo "Install.command exit code: $code"
+          exit "$code"
+
+      - name: Check the scaffold
+        shell: bash
+        run: bash .github/scripts/check_mac.sh "$HOME/Scaffold_Brain" scaffold "$RUNNER_TEMP/ci/command_run.txt" 2>&1 | tee "$RUNNER_TEMP/ci/check_scaffold.txt"; exit "${PIPESTATUS[0]}"
+
+      - name: Setup window in Chrome
+        shell: bash
+        run: bash .github/scripts/window_shot.sh "$HOME/Scaffold_Brain" "$RUNNER_TEMP/ci/window" 2>&1 | tee "$RUNNER_TEMP/ci/window.txt"; exit "${PIPESTATUS[0]}"
+
+      - name: Upload logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zip-macos-15
+          path: ${{ runner.temp }}/ci/
+          if-no-files-found: warn
