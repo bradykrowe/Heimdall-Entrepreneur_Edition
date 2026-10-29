@@ -1,5 +1,7 @@
 # Heimdall: Entrepreneur Edition
 
+![The Heimdall setup window on a laptop, every step marked done](docs/img/setup_window_laptop.jpg)
+
 Heimdall is a second brain: a folder on your computer that Claude answers from. Free. You need a Claude Pro or Max plan, which includes Claude Code.
 
 ## Install with one line
